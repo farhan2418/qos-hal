@@ -10,8 +10,18 @@ get_backend() will raise KeyError since nothing is registered yet).
 
 from qos_hal.backend import Backend
 from qos_hal.cached_backend import CachedBackend
+from qos_hal.client import QosHalClient, QosHalClientError, RemoteBackendError
 from qos_hal.registry import available_backends, get_backend, register
 
 __version__ = "0.1.0"
 
-__all__ = ["Backend", "CachedBackend", "get_backend", "register", "available_backends"]
+__all__ = [
+    "Backend",
+    "CachedBackend",
+    "get_backend",
+    "register",
+    "available_backends",
+    "QosHalClient",
+    "QosHalClientError",
+    "RemoteBackendError",
+]
