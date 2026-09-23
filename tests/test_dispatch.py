@@ -87,6 +87,30 @@ def test_get_result_round_trip(dispatch):
     result = dispatch({"method": "get_result", "params": {"job_id": "FAKE_smoke123"}})
     assert result["job_id"] == "FAKE_smoke123"
     assert result["counts"] == {"00": 512, "11": 512}
+    assert result["raw"] is None
+
+
+def test_get_result_always_nulls_raw_even_when_backend_provides_one(dispatch, backend):
+    """Regression test: IBMBackend.get_result() stashes the live,
+    non-JSON-safe SamplerV2 result object in JobResult.raw. Previously
+    dispatch() passed it through unchanged via _to_jsonable() (which
+    doesn't recognize arbitrary objects), and it only failed later at
+    json.dumps() time inside server.py — outside any error handling,
+    crashing the whole connection instead of returning a clean error.
+    dispatch() must now null it out itself, regardless of what the
+    backend put there, before the response ever reaches server.py."""
+
+    class _UnserializableProviderPayload:
+        """Stands in for a real SDK result object: not a dict, not a
+        dataclass, and json.dumps() has no idea what to do with it."""
+
+    backend.raw_result = _UnserializableProviderPayload()
+    result = dispatch({"method": "get_result", "params": {"job_id": "FAKE_smoke123"}})
+    assert result["raw"] is None
+    # Confirm the whole response is actually JSON-safe now, not just
+    # that dispatch() didn't crash.
+    import json
+    json.dumps(result)
 
 
 def test_cancel_job_returns_none(dispatch):

@@ -22,6 +22,8 @@ class FakeBackend(Backend):
         self._connected = False
         self.connect_calls = []  # list of backend_name args passed
         self.submitted_circuits = []
+        self.raw_result = None  # settable by tests to simulate a
+                                 # provider-specific, non-JSON-safe raw payload
 
     @property
     def is_connected(self):
@@ -66,7 +68,7 @@ class FakeBackend(Backend):
         return JobStatus.DONE
 
     def get_result(self, job_id):
-        return JobResult(job_id=job_id, counts={"00": 512, "11": 512})
+        return JobResult(job_id=job_id, counts={"00": 512, "11": 512}, raw=self.raw_result)
 
     def cancel_job(self, job_id):
         pass

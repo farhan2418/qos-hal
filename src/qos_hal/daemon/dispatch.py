@@ -93,7 +93,20 @@ def make_dispatcher(backend: Backend):
             return _to_jsonable(status)
 
         if method == "get_result":
-            return _to_jsonable(backend.get_result(params["job_id"]))
+            job_result = backend.get_result(params["job_id"])
+            # job_result.raw carries whatever provider-specific object the
+            # backend implementation stashed there (e.g. IBMBackend's raw
+            # SamplerV2 result) — never assumed JSON-safe, and historically
+            # wasn't: _to_jsonable() doesn't recognize it, so it passed
+            # through unchanged and only failed later at json.dumps() time,
+            # in server.py, outside any error handling — crashing the whole
+            # connection instead of returning a clean error (see server.py's
+            # _handle_line for the matching fix). Rather than attempt to
+            # serialize whatever a given backend happens to have put there,
+            # raw is always dropped to None over the wire; the real object
+            # remains available to anything using the Backend directly
+            # in-process (i.e. not through this daemon protocol).
+            return {"job_id": job_result.job_id, "counts": job_result.counts, "raw": None}
 
         if method == "cancel_job":
             backend.cancel_job(params["job_id"])

@@ -168,6 +168,20 @@ def test_get_result(client):
     assert result.raw is None
 
 
+def test_get_result_raw_is_none_even_when_backend_has_a_real_payload(client, running_server):
+    """Regression test for the connection-killing bug: the client must
+    get back raw=None cleanly, not have the call fail, even when the
+    backend's JobResult.raw held something non-JSON-safe."""
+    _, backend = running_server
+
+    class _UnserializableProviderPayload:
+        pass
+
+    backend.raw_result = _UnserializableProviderPayload()
+    result = client.get_result("FAKE_smoke123")
+    assert result.raw is None
+
+
 def test_cancel_job(client):
     assert client.cancel_job("FAKE_smoke123") is None
 

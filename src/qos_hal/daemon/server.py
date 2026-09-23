@@ -97,17 +97,17 @@ class DaemonServer:
                     line, buffer = buffer.split(b"\n", 1)
                     if not line.strip():
                         continue
-                    response = self._handle_line(line)
-                    conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
+                    response_bytes = self._handle_line(line)
+                    conn.sendall(response_bytes)
 
-    def _handle_line(self, line: bytes) -> dict:
+    def _handle_line(self, line: bytes) -> bytes:
         try:
             request = json.loads(line)
         except json.JSONDecodeError as e:
-            return {"ok": False, "error": {"type": "ProtocolError", "message": f"Invalid JSON: {e}"}}
+            return self._encode_response({"ok": False, "error": {"type": "ProtocolError", "message": f"Invalid JSON: {e}"}})
 
         if not isinstance(request, dict) or "method" not in request:
-            return {"ok": False, "error": {"type": "ProtocolError", "message": "Request must be a JSON object with a 'method' key"}}
+            return self._encode_response({"ok": False, "error": {"type": "ProtocolError", "message": "Request must be a JSON object with a 'method' key"}})
 
         try:
             # All Backend calls are serialized through one lock, since the
@@ -116,6 +116,23 @@ class DaemonServer:
             # clients don't block other connections from being read.
             with self._backend_lock:
                 result = self._dispatch_fn(request)
-            return {"ok": True, "result": result}
+            response = {"ok": True, "result": result}
         except Exception as e:
-            return {"ok": False, "error": {"type": type(e).__name__, "message": str(e)}}
+            return self._encode_response({"ok": False, "error": {"type": type(e).__name__, "message": str(e)}})
+
+        # json.dumps() is deliberately INSIDE this try/except, not left to
+        # the caller: a dispatch_fn can return something that *looks*
+        # dict-shaped and JSON-safe but isn't (e.g. a nested provider SDK
+        # object a future dispatch method forgets to strip) — that used to
+        # raise unhandled in _handle_connection, killing the connection
+        # thread with no response sent at all, rather than surfacing as a
+        # normal {"ok": false} error the client can see and act on. This is
+        # a generic safety net independent of any one method's payload.
+        try:
+            return self._encode_response(response)
+        except (TypeError, ValueError) as e:
+            return self._encode_response({"ok": False, "error": {"type": type(e).__name__, "message": f"failed to serialize response: {e}"}})
+
+    @staticmethod
+    def _encode_response(response: dict) -> bytes:
+        return json.dumps(response).encode("utf-8") + b"\n"

@@ -222,3 +222,72 @@ def test_client_closing_connection_does_not_crash_server(running_server):
     resp = _send_and_recv(client2, {"method": "list_available_backends", "params": {}})
     assert resp["ok"] is True
     client2.close()
+
+
+def test_get_result_with_unserializable_raw_does_not_crash_connection(running_server):
+    """End-to-end regression test for the bug where IBMBackend's raw
+    SamplerV2 result (stashed in JobResult.raw) made it past dispatch()
+    unconverted and only failed at json.dumps() time in server.py —
+    outside any error handling, silently killing the connection thread
+    instead of returning a response. dispatch.py now nulls raw itself
+    (see test_dispatch.py), so this call must complete normally here."""
+    sock_path, backend = running_server
+
+    class _UnserializableProviderPayload:
+        pass
+
+    backend.raw_result = _UnserializableProviderPayload()
+    client = _connect(sock_path)
+    resp = _send_and_recv(client, {"method": "get_result", "params": {"job_id": "FAKE_smoke123"}})
+    assert resp["ok"] is True
+    assert resp["result"]["raw"] is None
+    client.close()
+
+
+def test_unserializable_dispatch_result_becomes_error_not_dead_connection(tmp_path):
+    """Direct test of the generic safety net in server.py, independent of
+    dispatch.py: if ANY dispatch_fn returns something json.dumps() can't
+    handle, the connection must survive with a clean {"ok": false} error
+    response, not die silently the way it used to (json.dumps() used to
+    run outside _handle_line's try/except, in _handle_connection, so a
+    bad payload from dispatch_fn crashed the whole connection thread with
+    no response sent at all)."""
+
+    class _Unserializable:
+        pass
+
+    def bad_dispatch(request):
+        return {"looks_fine": "on the surface", "but_this_is_not": _Unserializable()}
+
+    sock_path = str(tmp_path / "unserializable_test.sock")
+    server = DaemonServer(sock_path, bad_dispatch)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    deadline = time.monotonic() + 2.0
+    while True:
+        try:
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            probe.connect(sock_path)
+            probe.close()
+            break
+        except (FileNotFoundError, ConnectionRefusedError):
+            if time.monotonic() > deadline:
+                raise TimeoutError("daemon never became ready to accept connections")
+            time.sleep(0.01)
+
+    try:
+        client = _connect(sock_path)
+        resp = _send_and_recv(client, {"method": "whatever", "params": {}})
+        assert resp["ok"] is False
+        assert "TypeError" in resp["error"]["type"]
+        client.close()
+
+        # And the connection/server survives to serve a next request —
+        # the whole point of the fix.
+        client2 = _connect(sock_path)
+        resp2 = _send_and_recv(client2, {"method": "whatever", "params": {}})
+        assert resp2["ok"] is False
+        client2.close()
+    finally:
+        server.stop()
