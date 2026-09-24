@@ -8,6 +8,7 @@ daemon with no interactive login. See QOS_IBM_TOKEN / QOS_IBM_INSTANCE below.
 
 import os
 
+from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
 from qiskit_ibm_runtime import QiskitRuntimeService
 from qiskit_ibm_runtime import SamplerV2 as Sampler
 
@@ -23,6 +24,31 @@ from qos_hal.backend import (
 
 QOS_IBM_TOKEN_ENV = "QOS_IBM_TOKEN"
 QOS_IBM_INSTANCE_ENV = "QOS_IBM_INSTANCE"
+
+# Resolves a previously open design question ("basis_gates vs target"):
+# target.operation_names on a real IBM backend is NOT the same thing as a
+# transpile()-safe basis_gates list. It includes dynamic-circuits
+# control-flow instructions (if_else, while_loop, for_loop, switch_case,
+# break_loop, continue_loop) and can include vendor-internal instruction
+# names that qiskit.transpile()'s BasisTranslator has no equivalence-library
+# entry for at all -- passing target.operation_names straight through broke
+# transpilation on real hardware. get_standard_gate_name_mapping() is
+# Qiskit's own canonical registry of every gate name it can actually
+# translate to/from (it already includes "measure", "delay", and "reset"
+# alongside real gates), so filtering operation_names down to that set is
+# what makes basis_gates+coupling_map alone (no target= object, no
+# QiskitRuntimeService on the client side) sufficient for a real
+# transpile() call. This is intentionally the "filter to standard gates
+# only" option from the three originally raised, not the "expose target
+# directly" option -- keeps the wire protocol JSON-only.
+_TRANSLATABLE_GATE_NAMES = frozenset(get_standard_gate_name_mapping().keys())
+
+
+def _filter_translatable_gates(operation_names: list[str]) -> list[str]:
+    """Pure helper, extracted out of get_topology() so this filtering
+    logic is unit-testable without a real IBM Target object — see the
+    module-level comment above for why this filtering exists at all."""
+    return [name for name in operation_names if name in _TRANSLATABLE_GATE_NAMES]
 
 # Maps IBM's own job status strings to our normalized JobStatus enum.
 _IBM_STATUS_MAP = {
@@ -106,11 +132,14 @@ class IBMBackend(Backend):
             fully_connected = False
             coupling_map = list(raw_coupling_map.get_edges())
 
+        raw_operation_names = list(target.operation_names)
+        basis_gates = _filter_translatable_gates(raw_operation_names)
+
         return Topology(
             backend_name=self._backend.name,
             num_qubits=target.num_qubits,
             coupling_map=coupling_map,
-            basis_gates=list(target.operation_names),
+            basis_gates=basis_gates,
             simulator=self._backend.configuration().simulator,
             fully_connected=fully_connected,
         )

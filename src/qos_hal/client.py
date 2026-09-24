@@ -94,7 +94,9 @@ from datetime import datetime
 from typing import Any
 
 from qiskit import qpy
+from qiskit import transpile as _qiskit_transpile
 from qiskit.circuit import QuantumCircuit
+from qiskit.transpiler import Target
 
 from qos_hal.backend import (
     BackendConnectionError,
@@ -105,6 +107,7 @@ from qos_hal.backend import (
     JobStatus,
     Topology,
 )
+from qos_hal.target_builder import build_target
 
 DEFAULT_SOCKET_PATH = "/tmp/qos_hal.sock"
 
@@ -447,3 +450,43 @@ class QosHalClient:
         """"write" tier: never silently retried on connection-loss — see
         module docstring."""
         self._call("cancel_job", {"job_id": job_id})
+
+    # ---- Client-side transpilation support ------------------------------
+    # Neither of these talks to the daemon beyond the two "read" tier
+    # calls they're built on (get_topology/get_calibration) -- the Target
+    # construction itself is pure client-side work, done by
+    # qos_hal.target_builder.build_target(). See that module's docstring
+    # for why a real Target (not basis_gates=/coupling_map=) is used.
+
+    def get_target(self) -> Target:
+        """Fetch fresh topology + calibration and build a Target from them.
+
+        Deliberately NOT cached: topology/calibration are already "read"
+        tier daemon calls (see module docstring's timeout/retry table),
+        and always re-fetching on every call — rather than caching the
+        built Target client-side — matches IBM's own guidance to pull
+        fresh calibration data close to submission time, since
+        calibration drifts between a device's periodic calibration
+        cycles. If you need to transpile many circuits against the same
+        snapshot in one script, call this once yourself and pass the
+        result to qiskit.transpile(target=...) directly instead of
+        calling get_target() (or transpile()) once per circuit.
+        """
+        topology = self.get_topology()
+        calibration = self.get_calibration()
+        return build_target(topology, calibration)
+
+    def transpile(self, circuit: QuantumCircuit, **transpile_kwargs) -> QuantumCircuit:
+        """Convenience wrapper: get_target() + qiskit.transpile(target=...).
+
+        For anything beyond the default transpile() behavior (a specific
+        optimization_level, seed_transpiler, etc.), pass it straight
+        through via transpile_kwargs — e.g.
+        client.transpile(qc, optimization_level=3). Passing target= or
+        backend= yourself here is redundant (target is always the one
+        get_target() just built) and will conflict with it; use
+        get_target() + qiskit.transpile() directly instead if you need
+        to control the target yourself.
+        """
+        target = self.get_target()
+        return _qiskit_transpile(circuit, target=target, **transpile_kwargs)

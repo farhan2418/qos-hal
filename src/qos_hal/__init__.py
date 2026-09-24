@@ -12,6 +12,7 @@ from qos_hal.backend import Backend
 from qos_hal.cached_backend import CachedBackend
 from qos_hal.client import QosHalClient, QosHalClientError, RemoteBackendError
 from qos_hal.registry import available_backends, get_backend, register
+from qos_hal.target_builder import build_target
 
 __version__ = "0.1.0"
 
@@ -24,4 +25,5 @@ __all__ = [
     "QosHalClient",
     "QosHalClientError",
     "RemoteBackendError",
+    "build_target",
 ]

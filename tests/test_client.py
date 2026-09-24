@@ -17,6 +17,7 @@ import time
 from datetime import datetime
 
 import pytest
+from qiskit import QuantumCircuit
 
 from qos_hal.backend import BackendJobError, JobResult, JobStatus
 from qos_hal.client import QosHalClient, QosHalClientError, RemoteBackendError
@@ -184,6 +185,72 @@ def test_get_result_raw_is_none_even_when_backend_has_a_real_payload(client, run
 
 def test_cancel_job(client):
     assert client.cancel_job("FAKE_smoke123") is None
+
+
+# ---- Target/transpile support --------------------------------------------
+
+def test_get_target_returns_a_real_target_from_daemon_data(client):
+    from qiskit.transpiler import Target
+
+    target = client.get_target()
+    assert isinstance(target, Target)
+    assert target.num_qubits == 3  # matches FakeBackend's topology fixture
+    assert "cx" in target.operation_names
+
+
+def test_get_target_is_never_cached_across_calls(client, running_server):
+    """Per design decision: always fetch fresh (matches IBM's own
+    guidance to pull calibration close to submission time), never cache
+    a built Target client-side. Confirmed here by mutating what the
+    backend returns between two calls and seeing the second Target
+    reflect it."""
+    _, backend = running_server
+    original_get_calibration = backend.get_calibration
+
+    first = client.get_target()
+    assert first["cx"][(0, 1)].error == pytest.approx(0.01)
+
+    def changed_calibration():
+        cal = original_get_calibration()
+        return cal.__class__(
+            backend_name=cal.backend_name,
+            timestamp=cal.timestamp,
+            gate_errors={**cal.gate_errors, "cx_0_1": 0.5},
+            readout_errors=cal.readout_errors,
+            t1_seconds=cal.t1_seconds,
+            t2_seconds=cal.t2_seconds,
+        )
+
+    backend.get_calibration = changed_calibration
+    second = client.get_target()
+    assert second["cx"][(0, 1)].error == pytest.approx(0.5)
+
+
+def test_transpile_uses_a_target_built_from_daemon_data(client):
+    """No measurement in this circuit deliberately: FakeBackend's fixed
+    topology fixture doesn't include "measure" in its basis_gates (other
+    tests assert that exact list), so this test sticks to gates it does
+    have. Full measurement round-trip against a Target with "measure"
+    included is covered in test_target_builder.py."""
+    qc = QuantumCircuit(3)
+    qc.h(0)
+    qc.cx(0, 1)
+    qc.cx(1, 2)
+
+    transpiled = client.transpile(qc, optimization_level=1)
+    assert isinstance(transpiled, QuantumCircuit)
+    used_names = set(transpiled.count_ops().keys())
+    assert used_names <= {"rz", "sx", "x", "cx"}
+
+
+def test_transpile_passes_through_kwargs(client):
+    qc = QuantumCircuit(2)
+    qc.h(0)
+    qc.cx(0, 1)
+    # seed_transpiler is accepted and doesn't raise -- confirms kwargs
+    # genuinely reach the underlying qiskit.transpile() call.
+    transpiled = client.transpile(qc, optimization_level=1, seed_transpiler=42)
+    assert isinstance(transpiled, QuantumCircuit)
 
 
 # ---- Error mapping ------------------------------------------------------

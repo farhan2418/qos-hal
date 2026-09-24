@@ -109,7 +109,16 @@ def test_available_backends_lists_registered_names_sorted():
 
 
 def test_ibm_backend_registers_itself_on_import():
-    import qos_hal.ibm  # noqa: F401 — import is the side effect under test
+    import importlib
+
+    import qos_hal.ibm
+
+    # Plain `import` is a no-op (module-level top-level code, including
+    # register(), only runs once per process) if another test module
+    # already imported qos_hal.ibm earlier in this same pytest session —
+    # reload forces the registration side effect to actually re-fire so
+    # this test doesn't depend on collection order.
+    importlib.reload(qos_hal.ibm)
 
     assert "ibm" in available_backends()
     backend = get_backend("ibm")
